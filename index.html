@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Disk Arm Racer</title>
+<style>
+  body { font-family: Arial, sans-serif; background: #12151f; color: #eee; max-width: 860px; margin: 24px auto; padding: 0 12px; }
+  h1 { margin-bottom: 4px; }
+  #hud { display: flex; flex-wrap: wrap; gap: 18px; background: #1e2333; padding: 10px 14px; border-radius: 10px; font-size: 18px; }
+  canvas { width: 100%; background: #0b0d14; border-radius: 10px; margin-top: 12px; display: block; }
+  #controls { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+  button { padding: 12px 20px; font-size: 18px; border: 0; border-radius: 8px; background: #f5a623; cursor: pointer; touch-action: none; }
+  button.ghost { background: #2c3350; color: #fff; }
+  #result { margin-top: 14px; padding: 14px; background: #1e2333; border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+  td, th { padding: 6px 10px; border-bottom: 1px solid #333a55; text-align: left; }
+  .you { color: #f5a623; font-weight: bold; }
+</style>
+</head>
+<body>
+  <h1>🏎️ Disk Arm Racer</h1>
+  <p>You are the disk head. Drive over every 🚩 request using the shortest total distance. Controls: ← → or A / D (or the buttons).</p>
+
+  <div id="hud">
+    <span>Round: <b id="round">1</b></span>
+    <span>Distance: <b id="dist">0</b></span>
+    <span>Left: <b id="left">0</b></span>
+    <span>Best efficiency: <b id="best">0</b>%</span>
+  </div>
+
+  <canvas id="c" width="860" height="230"></canvas>
+
+  <div id="controls">
+    <button id="btnL" class="ghost">◀ Left</button>
+    <button id="btnR" class="ghost">Right ▶</button>
+    <button id="start">Start round</button>
+  </div>
+
+  <div id="result" hidden></div>
+
+<script>
+// ================= SETTINGS =================
+const TRACK = 199;            // cylinders 0..199
+const SPEED = 60;             // cylinders per second
+const W = 860, H = 230;
+const PAD = 30;               // canvas margin
+const $ = id => document.getElementById(id);
+const ctx = $("c").getContext("2d");
+
+// ================= STATE =================
+let round = 1, head = 100, dist = 0, running = false, facing = 1;
+let requests = [], startHead = 100;
+let left = false, right = false, last = 0;
+
+// ================= HIGH SCORE =================
+function loadBest() { try { return Number(localStorage.getItem("diskBest")) || 0; } catch (e) { return 0; } }
+function saveBest(v) { try { if (v > loadBest()) localStorage.setItem("diskBest", v); } catch (e) {} }
+
+// ================= HELPERS =================
+const xOf = cyl => PAD + cyl / TRACK * (W - 2 * PAD);
+
+// ================= ROUND SETUP =================
+function newRound() {
+  const n = 4 + round;                                  // more requests each round
+  requests = Array.from({ length: n }, () => ({
+    pos: Math.floor(Math.random() * (TRACK + 1)), served: false
+  }));
+  startHead = head = 20 + Math.floor(Math.random() * 160);
+  dist = 0;
+  running = true;
+  $("result").hidden = true;
+  $("start").hidden = true;
+  updateHud();
+}
+
+// ================= ALGORITHMS (for comparison) =================
+function fcfs(h, list) {
+  let d = 0;
+  list.forEach(p => { d += Math.abs(p - h); h = p; });
+  return d;
+}
+function sstf(h, list) {
+  let d = 0, rest = [...list];
+  while (rest.length) {
+    let bi = 0;
+    rest.forEach((p, i) => { if (Math.abs(p - h) < Math.abs(rest[bi] - h)) bi = i; });
+    d += Math.abs(rest[bi] - h);
+    h = rest[bi];
+    rest.splice(bi, 1);
+  }
+  return d;
+}
+function scan(h, list) {                                // LOOK: best of two sweep directions
+  const lo = Math.min(...list), hi = Math.max(...list);
+  return Math.min(Math.abs(h - lo), Math.abs(h - hi)) + (hi - lo);
+}
+
+// ================= UPDATE =================
+function update(dt) {
+  if (!running) return;
+  const dir = (right ? 1 : 0) - (left ? 1 : 0);
+  if (dir === 0) return;
+  facing = dir;
+
+  const prev = head;
+  head = Math.max(0, Math.min(TRACK, head + dir * SPEED * dt));
+  dist += Math.abs(head - prev);
+
+  const lo = Math.min(prev, head), hi = Math.max(prev, head);
+  requests.forEach(r => { if (!r.served && r.pos >= lo && r.pos <= hi) r.served = true; });
+
+  updateHud();
+  if (requests.every(r => r.served)) finishRound();
+}
+
+function updateHud() {
+  $("round").textContent = round;
+  $("dist").textContent = Math.round(dist);
+  $("left").textContent = requests.filter(r => !r.served).length;
+  $("best").textContent = loadBest();
+}
+
+// ================= FINISH =================
+function finishRound() {
+  running = false;
+  const list = requests.map(r => r.pos);
+  const yours = Math.round(dist);
+  const best = scan(startHead, list);
+  const efficiency = Math.min(100, Math.round(best / Math.max(yours, 1) * 100));
+  saveBest(efficiency);
+  updateHud();
+
+  const stars = efficiency >= 95 ? "⭐⭐⭐" : efficiency >= 75 ? "⭐⭐" : "⭐";
+  $("result").hidden = false;
+  $("result").innerHTML = `
+    <h2>Round ${round} complete! ${stars}</h2>
+    <table>
+      <tr><th>Method</th><th>Total seek distance</th></tr>
+      <tr class="you"><td>You</td><td>${yours}</td></tr>
+      <tr><td>FCFS (serve in arrival order)</td><td>${fcfs(startHead, list)}</td></tr>
+      <tr><td>SSTF (always go to nearest)</td><td>${sstf(startHead, list)}</td></tr>
+      <tr><td>SCAN / LOOK (best sweep)</td><td>${best}</td></tr>
+    </table>
+    <p>Efficiency: <b>${efficiency}%</b>. Tip: go to the nearer end first, then sweep across in one direction without turning back.</p>`;
+  $("start").textContent = "Next round ▶";
+  $("start").hidden = false;
+  round++;
+}
+
+// ================= DRAW =================
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  // road
+  ctx.fillStyle = "#2b2f40";
+  ctx.fillRect(PAD - 10, 90, W - 2 * PAD + 20, 60);
+  ctx.strokeStyle = "#f5f5f5";
+  ctx.setLineDash([16, 14]);
+  ctx.beginPath(); ctx.moveTo(PAD - 10, 120); ctx.lineTo(W - PAD + 10, 120); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // cylinder ruler
+  ctx.fillStyle = "#8a93b8";
+  ctx.font = "12px Arial";
+  ctx.textAlign = "center";
+  for (let c = 0; c <= TRACK; c += 20) {
+    const x = xOf(c);
+    ctx.fillRect(x - 0.5, 155, 1, 8);
+    ctx.fillText(c, x, 178);
+  }
+  ctx.fillText("cylinder", W / 2, 200);
+
+  // request flags
+  requests.forEach(r => {
+    const x = xOf(r.pos);
+    ctx.font = "24px Arial";
+    ctx.globalAlpha = r.served ? 0.35 : 1;
+    ctx.fillText(r.served ? "✅" : "🚩", x, 80);
+    ctx.globalAlpha = 1;
+    ctx.font = "11px Arial";
+    ctx.fillStyle = "#c9d1f5";
+    ctx.fillText(r.pos, x, 62);
+  });
+
+  // car (flip to face driving direction)
+  ctx.save();
+  ctx.translate(xOf(head), 122);
+  ctx.scale(facing === 1 ? -1 : 1, 1);
+  ctx.font = "34px Arial";
+  ctx.textAlign = "center";
+  ctx.fillText("🏎️", 0, 12);
+  ctx.restore();
+}
+
+// ================= LOOP =================
+function loop(t) {
+  const dt = Math.min(0.05, (t - last) / 1000 || 0);
+  last = t;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// ================= INPUT =================
+window.addEventListener("keydown", e => {
+  if (e.key === "ArrowLeft" || e.key === "a") { left = true; e.preventDefault(); }
+  if (e.key === "ArrowRight" || e.key === "d") { right = true; e.preventDefault(); }
+});
+window.addEventListener("keyup", e => {
+  if (e.key === "ArrowLeft" || e.key === "a") left = false;
+  if (e.key === "ArrowRight" || e.key === "d") right = false;
+});
+function hold(btn, setter) {
+  btn.addEventListener("pointerdown", () => setter(true));
+  ["pointerup", "pointerleave", "pointercancel"].forEach(ev => btn.addEventListener(ev, () => setter(false)));
+}
+hold($("btnL"), v => left = v);
+hold($("btnR"), v => right = v);
+$("start").onclick = newRound;
+
+updateHud();
+</script>
+</body>
+</html>
